@@ -3,4 +3,4 @@ sentence-transformers
 faiss-cpu
 numpy
 python-dotenv
-google-generativeai
+google-generativeai==0.3.0
