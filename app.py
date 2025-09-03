@@ -3,7 +3,7 @@ from sentence_transformers import SentenceTransformer
 import faiss
 import numpy as np
 import os
-from google import genai
+import genai
 from dotenv import load_dotenv
 import pickle
 
