@@ -36,10 +36,10 @@ def load_model():
 # Build FAISS index with overlap
 # -------------------------------
 @st.cache_data(show_spinner=False)
-def build_index(text, chunk_size=2000, overlap=200):
+def build_index(text, chunk_size=3000, overlap=400):
     """
     Split text into overlapping chunks to preserve verse flow.
-    Example: 2000 chars per chunk with 200 overlap.
+    Larger chunk size + overlap improves context.
     """
     model = load_model()
     chunks = []
@@ -47,7 +47,7 @@ def build_index(text, chunk_size=2000, overlap=200):
     while start < len(text):
         end = start + chunk_size
         chunks.append(text[start:end])
-        start += chunk_size - overlap  # step with overlap
+        start += chunk_size - overlap
 
     st.info(f"Building embeddings for {len(chunks)} chunks, please wait...")
     embeddings = model.encode(chunks, show_progress_bar=True)
@@ -62,7 +62,7 @@ def build_index(text, chunk_size=2000, overlap=200):
 # -------------------------------
 # Retrieve relevant chunks
 # -------------------------------
-def retrieve(query, top_k=5):
+def retrieve(query, top_k=10):
     if st.session_state.index is None or len(st.session_state.chunks) == 0:
         return ["Biblia haijapakiwa!"], None
     model = load_model()
@@ -149,17 +149,18 @@ if sent and user_query:
     # Save user message
     st.session_state.messages.append({"role": "user", "content": user_query})
 
-    # Retrieve multiple chunks
-    retrieved_texts, _ = retrieve(user_query)
+    # Retrieve multiple chunks (more top_k for better coverage)
+    retrieved_texts, _ = retrieve(user_query, top_k=10)
     context = "\n\n".join(retrieved_texts)
 
     # Build improved prompt
     prompt = f"""
 You are a helpful Bible assistant.
-Answer the question using ONLY the context below.
+Answer the question using the context below.
 - Always include the **book name, chapter, and verse** when quoting.
-- Write the answer in a clear, natural explanation.
-- If the context is not enough, reply: "Sina uhakika kwa maandiko haya."
+- Write the answer in clear, natural Swahili.
+- If the context partially answers the question, combine the information naturally.
+- If there is no relevant information, reply: "Sina uhakika kwa maandiko haya."
 
 Context:
 {context}
