@@ -4,6 +4,7 @@ import faiss
 import numpy as np
 import os
 from google import genai
+from dotenv import load_dotenv
 
 # -------------------------------
 # Streamlit page config
@@ -21,10 +22,7 @@ if "chunks" not in st.session_state: st.session_state.chunks = []
 # -------------------------------
 # Gemini API
 # -------------------------------
-from dotenv import load_dotenv
-import os
-load_dotenv()
-os.environ["GEMINI_API_KEY"] = os.getenv("GEMINI_API_KEY")
+load_dotenv("api.env")  # load key from api.env
 client = genai.Client()
 
 # -------------------------------
@@ -35,34 +33,36 @@ def load_model():
     return SentenceTransformer("all-MiniLM-L6-v2")
 
 # -------------------------------
-# Build FAISS index with caching
+# Build FAISS index with overlap
 # -------------------------------
 @st.cache_data(show_spinner=False)
-def build_index(text, chunk_size=4000):
+def build_index(text, chunk_size=2000, overlap=200):
     """
-    Split text into bigger chunks (default 4000 chars) to reduce embedding time.
-    Return model, FAISS index, and chunks.
+    Split text into overlapping chunks to preserve verse flow.
+    Example: 2000 chars per chunk with 200 overlap.
     """
     model = load_model()
-    
-    # Split text into chunks
-    chunks = [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
-    
-    # Generate embeddings
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start + chunk_size
+        chunks.append(text[start:end])
+        start += chunk_size - overlap  # step with overlap
+
     st.info(f"Building embeddings for {len(chunks)} chunks, please wait...")
     embeddings = model.encode(chunks, show_progress_bar=True)
     embeddings = np.array(embeddings, dtype="float32")
-    
+
     # Build FAISS index
     index = faiss.IndexFlatL2(embeddings.shape[1])
     index.add(embeddings)
-    
+
     return model, index, chunks
 
 # -------------------------------
-# Retrieve relevant chunk
+# Retrieve relevant chunks
 # -------------------------------
-def retrieve(query, top_k=1):
+def retrieve(query, top_k=5):
     if st.session_state.index is None or len(st.session_state.chunks) == 0:
         return ["Biblia haijapakiwa!"], None
     model = load_model()
@@ -97,13 +97,13 @@ def chat_bubble(text, role="assistant"):
             padding: 12px 14px;
             border-radius: 12px;
             margin-bottom: 8px;
-            text-align: left;">
+            text-align: left;
+            white-space: pre-line;">
             🤖 {text}
         </div>""", unsafe_allow_html=True)
 
 # -------------------------------
 # Sidebar
-#sidebars
 # -------------------------------
 with st.sidebar:
     st.header("📖 Bible Document")
@@ -111,7 +111,7 @@ with st.sidebar:
         st.session_state.messages = []
 
 # -------------------------------
-# Load Bible and build index if not already
+# Load Bible and build index
 # -------------------------------
 if st.session_state.index is None:
     try:
@@ -132,7 +132,6 @@ st.title("📖 READ THE BIBLE (RAG Chatbot)")
 # -------------------------------
 chat_box = st.container()
 with chat_box:
-    # Show initial greeting immediately
     if not st.session_state.messages:
         chat_bubble("Habari! Mimi niko tayari kukusaidia. Uliza chochote kuhusu Biblia.", "assistant")
     for msg in st.session_state.messages:
@@ -147,32 +146,37 @@ with st.form("chat_form", clear_on_submit=True):
     sent = st.form_submit_button("Tuma", disabled=disabled)
 
 if sent and user_query:
-    # Store user message
+    # Save user message
     st.session_state.messages.append({"role": "user", "content": user_query})
-    
-    # Retrieve relevant chunk(s)
-    retrieved_text, _ = retrieve(user_query)
-    
-    # Build prompt for Gemini
+
+    # Retrieve multiple chunks
+    retrieved_texts, _ = retrieve(user_query)
+    context = "\n\n".join(retrieved_texts)
+
+    # Build improved prompt
     prompt = f"""
-You are an assistant. Answer the question based ONLY on the context below.
-If the answer is not in the context, say you don't know.
+You are a helpful Bible assistant.
+Answer the question using ONLY the context below.
+- Always include the **book name, chapter, and verse** when quoting.
+- Write the answer in a clear, natural explanation.
+- If the context is not enough, reply: "Sina uhakika kwa maandiko haya."
 
 Context:
-{retrieved_text[0]}
+{context}
 
 Question: {user_query}
+
+Answer:
 """
+
     # Generate answer
     try:
         response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
         answer = response.text.strip()
     except Exception as e:
         answer = f"Samahani, hitilafu imetokea: {e}"
-    
-    # Store assistant message
+
+    # Save and render assistant message
     st.session_state.messages.append({"role": "assistant", "content": answer})
-    
-    # Render chat
     chat_bubble(user_query, role="user")
     chat_bubble(answer, role="assistant")
