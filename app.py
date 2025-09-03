@@ -5,19 +5,22 @@ import numpy as np
 import os
 from google import genai
 from dotenv import load_dotenv
+import pickle
 
 # -------------------------------
 # Streamlit page config
 # -------------------------------
-st.set_page_config(page_title="RAG Chat", page_icon="📖", layout="wide")
+st.set_page_config(page_title="RAG Bible Chat", page_icon="📖", layout="wide")
 
 # -------------------------------
 # Session state
 # -------------------------------
-if "messages" not in st.session_state: st.session_state.messages = []
-if "model" not in st.session_state: st.session_state.model = None
-if "index" not in st.session_state: st.session_state.index = None
-if "chunks" not in st.session_state: st.session_state.chunks = []
+if "messages" not in st.session_state: 
+    st.session_state.messages = []
+if "model" not in st.session_state: 
+    st.session_state.model = None
+if "indexes" not in st.session_state: 
+    st.session_state.indexes = {}
 
 # -------------------------------
 # Gemini API
@@ -33,44 +36,83 @@ def load_model():
     return SentenceTransformer("all-MiniLM-L6-v2")
 
 # -------------------------------
-# Build FAISS index with overlap
+# Build or load TWO indexes (small + large)
 # -------------------------------
-@st.cache_data(show_spinner=False)
-def build_index(text, chunk_size=3000, overlap=400):
-    """
-    Split text into overlapping chunks to preserve verse flow.
-    Larger chunk size + overlap improves context.
-    """
+def build_or_load_indexes(text):
     model = load_model()
-    chunks = []
-    start = 0
-    while start < len(text):
-        end = start + chunk_size
-        chunks.append(text[start:end])
-        start += chunk_size - overlap
 
-    st.info(f"Building embeddings for {len(chunks)} chunks, please wait...")
-    embeddings = model.encode(chunks, show_progress_bar=True)
-    embeddings = np.array(embeddings, dtype="float32")
+    def chunk_text(size, overlap):
+        chunks, start = [], 0
+        while start < len(text):
+            end = start + size
+            chunks.append(text[start:end])
+            start += size - overlap
+        return chunks
 
-    # Build FAISS index
-    index = faiss.IndexFlatL2(embeddings.shape[1])
-    index.add(embeddings)
+    indexes = {}
+    for name, size, overlap in [("small", 500, 200), ("large", 2000, 400)]:
+        index_file, chunk_file = f"bible_{name}.index", f"chunks_{name}.pkl"
 
-    return model, index, chunks
+        if os.path.exists(index_file) and os.path.exists(chunk_file):
+            st.info(f"🔄 Loading {name} index...")
+            index = faiss.read_index(index_file)
+            with open(chunk_file, "rb") as f:
+                chunks = pickle.load(f)
+        else:
+            st.info(f"⚙️ Building {name} index...")
+            chunks = chunk_text(size, overlap)
+            embeddings = model.encode(chunks, show_progress_bar=True)
+            embeddings = np.array(embeddings, dtype="float32")
+            index = faiss.IndexFlatL2(embeddings.shape[1])
+            index.add(embeddings)
+            faiss.write_index(index, index_file)
+            with open(chunk_file, "wb") as f:
+                pickle.dump(chunks, f)
+
+        indexes[name] = (index, chunks)
+
+    return model, indexes
 
 # -------------------------------
 # Retrieve relevant chunks
 # -------------------------------
-def retrieve(query, top_k=10):
-    if st.session_state.index is None or len(st.session_state.chunks) == 0:
-        return ["Biblia haijapakiwa!"], None
+def retrieve(query, top_k=5):
+    # Detect if query looks like a verse (e.g. "Genesis 1:1")
+    if any(ch in query for ch in [":", "mstari", "verse"]):
+        index, chunks = st.session_state.indexes["small"]
+    else:
+        index, chunks = st.session_state.indexes["large"]
+
     model = load_model()
     query_emb = model.encode([query])
     query_emb = np.array(query_emb, dtype="float32")
-    distances, indices = st.session_state.index.search(query_emb, top_k)
-    results = [st.session_state.chunks[i] for i in indices[0]]
-    return results, distances
+    distances, indices = index.search(query_emb, top_k)
+    results = [chunks[i] for i in indices[0]]
+    return results
+
+# -------------------------------
+# Build final prompt (with memory)
+# -------------------------------
+def build_prompt(user_query, context):
+    history = "\n".join(
+        [f"{msg['role']}: {msg['content']}" for msg in st.session_state.messages[-5:]]
+    )
+    return f"""
+You are a Bible assistant. Answer in clear Swahili.
+Always include book, chapter, and verse when quoting.
+If context is partial, still try to answer naturally.
+
+Conversation so far:
+{history}
+
+Bible context:
+{context}
+
+User question:
+{user_query}
+
+Answer:
+"""
 
 # -------------------------------
 # Chat bubble renderer
@@ -111,16 +153,16 @@ with st.sidebar:
         st.session_state.messages = []
 
 # -------------------------------
-# Load Bible and build index
+# Load Bible and build indexes
 # -------------------------------
-if st.session_state.index is None:
+if not st.session_state.indexes:
     try:
         with open("bible.txt", "r", encoding="utf-8") as f:
             text = f.read()
-        st.session_state.model, st.session_state.index, st.session_state.chunks = build_index(text)
-        st.success("Bible loaded, chunked, and indexed! You can start chatting.")
+        st.session_state.model, st.session_state.indexes = build_or_load_indexes(text)
+        st.success("✅ Bible loaded and indexed! Start chatting.")
     except FileNotFoundError:
-        st.error("bible.txt not found! Place it in the same folder as app.py.")
+        st.error("⚠️ bible.txt not found! Place it in the same folder as app.py.")
 
 # -------------------------------
 # Page title
@@ -133,46 +175,31 @@ st.title("📖 READ THE BIBLE (RAG Chatbot)")
 chat_box = st.container()
 with chat_box:
     if not st.session_state.messages:
-        chat_bubble("Habari! Mimi niko tayari kukusaidia. Uliza chochote kuhusu Biblia.", "assistant")
+        chat_bubble("Habari! Niko tayari kukusaidia kuhusu Biblia.", "assistant")
     for msg in st.session_state.messages:
         chat_bubble(msg["content"], role=msg["role"])
 
 # -------------------------------
-# Input form
+# Input form BELOW chat
 # -------------------------------
-disabled = st.session_state.index is None
+disabled = not st.session_state.indexes
 with st.form("chat_form", clear_on_submit=True):
-    user_query = st.text_input("Andika swali lako hapa...", disabled=disabled)
+    user_query = st.text_input("✍️ Andika swali lako hapa...", disabled=disabled)
     sent = st.form_submit_button("Tuma", disabled=disabled)
 
 if sent and user_query:
     # Save user message
     st.session_state.messages.append({"role": "user", "content": user_query})
 
-    # Retrieve multiple chunks (more top_k for better coverage)
-    retrieved_texts, _ = retrieve(user_query, top_k=10)
+    # Retrieve relevant context
+    retrieved_texts = retrieve(user_query, top_k=5)
     context = "\n\n".join(retrieved_texts)
 
-    # Build improved prompt
-    prompt = f"""
-You are a helpful Bible assistant.
-Answer the question using the context below.
-- Always include the **book name, chapter, and verse** when quoting.
-- Write the answer in clear, natural Swahili.
-- If the context partially answers the question, combine the information naturally.
-- If there is no relevant information, reply: "Sina uhakika kwa maandiko haya."
+    # Build final prompt
+    qa_prompt = build_prompt(user_query, context)
 
-Context:
-{context}
-
-Question: {user_query}
-
-Answer:
-"""
-
-    # Generate answer
     try:
-        response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+        response = client.models.generate_content(model="gemini-2.5-flash", contents=qa_prompt)
         answer = response.text.strip()
     except Exception as e:
         answer = f"Samahani, hitilafu imetokea: {e}"
