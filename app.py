@@ -103,6 +103,7 @@ def chat_bubble(text, role="assistant"):
 
 # -------------------------------
 # Sidebar
+#sidebars
 # -------------------------------
 with st.sidebar:
     st.header("📖 Bible Document")
