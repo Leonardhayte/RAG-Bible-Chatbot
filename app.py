@@ -216,7 +216,7 @@ if not st.session_state.indexes:
 # -------------------------------
 # Page title & Chat window
 # -------------------------------
-st.title("📖 READ THE BIBLE (RAG Chatbot)")
+st.title("📖 READ THE BIBLE (Leonard Chatbot)")
 st.markdown('<div class="chat-container">', unsafe_allow_html=True)
 if not st.session_state.messages:
     chat_bubble("👋 Hello! I am ready to help you with the Bible.", "assistant")
