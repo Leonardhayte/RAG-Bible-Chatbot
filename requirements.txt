@@ -1,7 +1,7 @@
-streamlit==1.27.0
-sentence-transformers==2.2.2
-faiss-cpu==1.7.4.post2
-numpy==1.25.0
-python-dotenv==1.0.0
-google-generativeai==0.2.3
-langdetect==1.0.9
+streamlit
+sentence-transformers
+faiss-cpu
+numpy
+python-dotenv
+google-generativeai
+langdetect
