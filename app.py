@@ -209,7 +209,6 @@ if not st.session_state.indexes:
         with open("bible.txt", "r", encoding="utf-8") as f:
             text = f.read()
         st.session_state.model, st.session_state.indexes = build_or_load_indexes(text)
-        st.success("✅ Bible loaded and indexed! Start chatting.")
     except FileNotFoundError:
         st.error("⚠️ bible.txt not found! Place it in the same folder as app.py.")
 
