@@ -3,9 +3,10 @@ from sentence_transformers import SentenceTransformer
 import faiss
 import numpy as np
 import os
-import genai
+from google import genai
 from dotenv import load_dotenv
 import pickle
+from langdetect import detect
 
 # -------------------------------
 # Streamlit page config
@@ -91,14 +92,26 @@ def retrieve(query, top_k=5):
     return results
 
 # -------------------------------
-# Build final prompt (with memory)
+# Build final prompt (with memory + language detection)
 # -------------------------------
 def build_prompt(user_query, context):
+    # Detect language of user query
+    try:
+        lang = detect(user_query)
+    except:
+        lang = "en"  # fallback if detection fails
+
+    if lang == "sw":
+        instruction = "Answer in clear Swahili."
+    else:
+        instruction = "Answer in clear English."
+
     history = "\n".join(
         [f"{msg['role']}: {msg['content']}" for msg in st.session_state.messages[-5:]]
     )
+
     return f"""
-You are a Bible assistant. Answer in clear Swahili.
+You are a Bible assistant. {instruction}
 Always include book, chapter, and verse when quoting.
 If context is partial, still try to answer naturally.
 
@@ -175,7 +188,7 @@ st.title("📖 READ THE BIBLE (RAG Chatbot)")
 chat_box = st.container()
 with chat_box:
     if not st.session_state.messages:
-        chat_bubble("Habari! Niko tayari kukusaidia kuhusu Biblia.", "assistant")
+        chat_bubble("👋 Hello! I am ready to help you with the Bible.", "assistant")
     for msg in st.session_state.messages:
         chat_bubble(msg["content"], role=msg["role"])
 
@@ -184,8 +197,8 @@ with chat_box:
 # -------------------------------
 disabled = not st.session_state.indexes
 with st.form("chat_form", clear_on_submit=True):
-    user_query = st.text_input("✍️ Andika swali lako hapa...", disabled=disabled)
-    sent = st.form_submit_button("Tuma", disabled=disabled)
+    user_query = st.text_input("✍️ Write your question here...", disabled=disabled)
+    sent = st.form_submit_button("Send", disabled=disabled)
 
 if sent and user_query:
     # Save user message
@@ -202,7 +215,7 @@ if sent and user_query:
         response = client.models.generate_content(model="gemini-2.5-flash", contents=qa_prompt)
         answer = response.text.strip()
     except Exception as e:
-        answer = f"Samahani, hitilafu imetokea: {e}"
+        answer = f"⚠️ Sorry, an error occurred: {e}"
 
     # Save and render assistant message
     st.session_state.messages.append({"role": "assistant", "content": answer})
