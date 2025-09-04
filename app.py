@@ -7,6 +7,7 @@ import google.generativeai as genai
 from dotenv import load_dotenv
 import pickle
 from langdetect import detect
+from datetime import datetime
 
 # -------------------------------
 # Streamlit page config
@@ -14,22 +15,24 @@ from langdetect import detect
 st.set_page_config(page_title="RAG Bible Chat", page_icon="📖", layout="wide")
 
 # -------------------------------
-# Session state
+# Session state initialization
 # -------------------------------
-if "messages" not in st.session_state: 
+if "messages" not in st.session_state:
     st.session_state.messages = []
-if "model" not in st.session_state: 
+if "model" not in st.session_state:
     st.session_state.model = None
-if "indexes" not in st.session_state: 
+if "indexes" not in st.session_state:
     st.session_state.indexes = {}
+if "conversations" not in st.session_state:
+    st.session_state.conversations = {"Conversation 1": []}
+if "current_conv" not in st.session_state:
+    st.session_state.current_conv = "Conversation 1"
 
 # -------------------------------
 # Gemini API
 # -------------------------------
-load_dotenv("api.env")  # load key from api.env
+load_dotenv("api.env")
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
-
-# Create model once
 gemini_model = genai.GenerativeModel("gemini-2.5-flash")
 
 # -------------------------------
@@ -40,8 +43,9 @@ def load_model():
     return SentenceTransformer("all-MiniLM-L6-v2")
 
 # -------------------------------
-# Build or load TWO indexes (small + large)
+# Build or load FAISS indexes
 # -------------------------------
+@st.cache_resource
 def build_or_load_indexes(text):
     model = load_model()
 
@@ -58,12 +62,10 @@ def build_or_load_indexes(text):
         index_file, chunk_file = f"bible_{name}.index", f"chunks_{name}.pkl"
 
         if os.path.exists(index_file) and os.path.exists(chunk_file):
-            st.info(f"🔄 Loading {name} index...")
             index = faiss.read_index(index_file)
             with open(chunk_file, "rb") as f:
                 chunks = pickle.load(f)
         else:
-            st.info(f"⚙️ Building {name} index...")
             chunks = chunk_text(size, overlap)
             embeddings = model.encode(chunks, show_progress_bar=True)
             embeddings = np.array(embeddings, dtype="float32")
@@ -81,7 +83,6 @@ def build_or_load_indexes(text):
 # Retrieve relevant chunks
 # -------------------------------
 def retrieve(query, top_k=5):
-    # Detect if query looks like a verse (e.g. "Genesis 1:1")
     if any(ch in query for ch in [":", "mstari", "verse"]):
         index, chunks = st.session_state.indexes["small"]
     else:
@@ -95,19 +96,14 @@ def retrieve(query, top_k=5):
     return results
 
 # -------------------------------
-# Build final prompt (with memory + language detection)
+# Build prompt with language detection
 # -------------------------------
 def build_prompt(user_query, context):
-    # Detect language of user query
     try:
         lang = detect(user_query)
     except:
-        lang = "en"  # fallback if detection fails
-
-    if lang == "sw":
-        instruction = "Answer in clear Swahili."
-    else:
-        instruction = "Answer in clear English."
+        lang = "en"
+    instruction = "Answer in clear Swahili." if lang == "sw" else "Answer in clear English."
 
     history = "\n".join(
         [f"{msg['role']}: {msg['content']}" for msg in st.session_state.messages[-5:]]
@@ -161,41 +157,52 @@ def chat_bubble(text, role="assistant"):
         </div>""", unsafe_allow_html=True)
 
 # -------------------------------
-# Custom CSS for fixed input
+# Custom CSS
 # -------------------------------
 st.markdown("""
-    <style>
-    .chat-container {
-        height: 70vh;
-        overflow-y: auto;
-        padding: 10px;
-        border: 1px solid #ddd;
-        border-radius: 10px;
-        background-color: #f9f9f9;
-        margin-bottom: 80px;
-    }
-    .input-container {
-        position: fixed;
-        bottom: 0;
-        left: 0;
-        right: 0;
-        background-color: white;
-        padding: 10px;
-        border-top: 1px solid #ddd;
-    }
-    </style>
+<style>
+.chat-container {
+    max-height: 65vh;
+    overflow-y: auto;
+    padding: 10px;
+    background-color: #f9f9f9;
+}
+.input-container {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background-color: white;
+    padding: 10px;
+    border-top: 1px solid #ddd;
+}
+</style>
 """, unsafe_allow_html=True)
 
 # -------------------------------
-# Sidebar
+# Sidebar: History & Controls
 # -------------------------------
 with st.sidebar:
     st.header("📖 Bible Document")
-    if st.button("🧹 Clear chat"):
+    # Add new conversation
+    if st.button("➕ New Conversation"):
+        new_name = f"Conversation {len(st.session_state.conversations)+1}"
+        st.session_state.conversations[new_name] = []
+        st.session_state.current_conv = new_name
         st.session_state.messages = []
+    # Show conversation history
+    st.subheader("Conversations")
+    conv_names = list(st.session_state.conversations.keys())
+    sel_conv = st.selectbox("Select Conversation", conv_names, index=conv_names.index(st.session_state.current_conv))
+    if sel_conv != st.session_state.current_conv:
+        st.session_state.current_conv = sel_conv
+        st.session_state.messages = st.session_state.conversations[sel_conv]
+    if st.button("🧹 Clear Current Chat"):
+        st.session_state.messages = []
+        st.session_state.conversations[st.session_state.current_conv] = []
 
 # -------------------------------
-# Load Bible and build indexes
+# Load Bible & indexes
 # -------------------------------
 if not st.session_state.indexes:
     try:
@@ -207,13 +214,9 @@ if not st.session_state.indexes:
         st.error("⚠️ bible.txt not found! Place it in the same folder as app.py.")
 
 # -------------------------------
-# Page title
+# Page title & Chat window
 # -------------------------------
 st.title("📖 READ THE BIBLE (RAG Chatbot)")
-
-# -------------------------------
-# Chat window (scrollable)
-# -------------------------------
 st.markdown('<div class="chat-container">', unsafe_allow_html=True)
 if not st.session_state.messages:
     chat_bubble("👋 Hello! I am ready to help you with the Bible.", "assistant")
@@ -222,7 +225,7 @@ for msg in st.session_state.messages:
 st.markdown('</div>', unsafe_allow_html=True)
 
 # -------------------------------
-# Fixed input form (like WhatsApp)
+# Fixed input
 # -------------------------------
 disabled = not st.session_state.indexes
 st.markdown('<div class="input-container">', unsafe_allow_html=True)
@@ -231,23 +234,21 @@ with st.form("chat_form", clear_on_submit=True):
     sent = st.form_submit_button("Send", disabled=disabled)
 st.markdown('</div>', unsafe_allow_html=True)
 
+# -------------------------------
+# Handle user input
+# -------------------------------
 if sent and user_query:
-    # Save user message
     st.session_state.messages.append({"role": "user", "content": user_query})
-
-    # Retrieve relevant context
     retrieved_texts = retrieve(user_query, top_k=5)
     context = "\n\n".join(retrieved_texts)
-
-    # Build final prompt
     qa_prompt = build_prompt(user_query, context)
-
     try:
         response = gemini_model.generate_content(qa_prompt)
         answer = response.text.strip()
     except Exception as e:
         answer = f"⚠️ Sorry, an error occurred: {e}"
-
-    # Save and render assistant message
     st.session_state.messages.append({"role": "assistant", "content": answer})
+
+    # Save conversation
+    st.session_state.conversations[st.session_state.current_conv] = st.session_state.messages
     st.rerun()
