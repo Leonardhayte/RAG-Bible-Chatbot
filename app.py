@@ -3,7 +3,7 @@ from sentence_transformers import SentenceTransformer
 import faiss
 import numpy as np
 import os
-from google import genai
+import google.generativeai as genai
 from dotenv import load_dotenv
 import pickle
 from langdetect import detect
@@ -27,7 +27,10 @@ if "indexes" not in st.session_state:
 # Gemini API
 # -------------------------------
 load_dotenv("api.env")  # load key from api.env
-client = genai.Client()
+genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+
+# Create model once
+gemini_model = genai.GenerativeModel("gemini-2.5-flash")
 
 # -------------------------------
 # Load SentenceTransformer model
@@ -158,6 +161,32 @@ def chat_bubble(text, role="assistant"):
         </div>""", unsafe_allow_html=True)
 
 # -------------------------------
+# Custom CSS for fixed input
+# -------------------------------
+st.markdown("""
+    <style>
+    .chat-container {
+        height: 70vh;
+        overflow-y: auto;
+        padding: 10px;
+        border: 1px solid #ddd;
+        border-radius: 10px;
+        background-color: #f9f9f9;
+        margin-bottom: 80px;
+    }
+    .input-container {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background-color: white;
+        padding: 10px;
+        border-top: 1px solid #ddd;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+# -------------------------------
 # Sidebar
 # -------------------------------
 with st.sidebar:
@@ -183,22 +212,24 @@ if not st.session_state.indexes:
 st.title("📖 READ THE BIBLE (RAG Chatbot)")
 
 # -------------------------------
-# Chat window
+# Chat window (scrollable)
 # -------------------------------
-chat_box = st.container()
-with chat_box:
-    if not st.session_state.messages:
-        chat_bubble("👋 Hello! I am ready to help you with the Bible.", "assistant")
-    for msg in st.session_state.messages:
-        chat_bubble(msg["content"], role=msg["role"])
+st.markdown('<div class="chat-container">', unsafe_allow_html=True)
+if not st.session_state.messages:
+    chat_bubble("👋 Hello! I am ready to help you with the Bible.", "assistant")
+for msg in st.session_state.messages:
+    chat_bubble(msg["content"], role=msg["role"])
+st.markdown('</div>', unsafe_allow_html=True)
 
 # -------------------------------
-# Input form BELOW chat
+# Fixed input form (like WhatsApp)
 # -------------------------------
 disabled = not st.session_state.indexes
+st.markdown('<div class="input-container">', unsafe_allow_html=True)
 with st.form("chat_form", clear_on_submit=True):
     user_query = st.text_input("✍️ Write your question here...", disabled=disabled)
     sent = st.form_submit_button("Send", disabled=disabled)
+st.markdown('</div>', unsafe_allow_html=True)
 
 if sent and user_query:
     # Save user message
@@ -212,12 +243,11 @@ if sent and user_query:
     qa_prompt = build_prompt(user_query, context)
 
     try:
-        response = client.models.generate_content(model="gemini-2.5-flash", contents=qa_prompt)
+        response = gemini_model.generate_content(qa_prompt)
         answer = response.text.strip()
     except Exception as e:
         answer = f"⚠️ Sorry, an error occurred: {e}"
 
     # Save and render assistant message
     st.session_state.messages.append({"role": "assistant", "content": answer})
-    chat_bubble(user_query, role="user")
-    chat_bubble(answer, role="assistant")
+    st.rerun()
