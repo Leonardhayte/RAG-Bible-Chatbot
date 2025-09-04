@@ -3,5 +3,5 @@ sentence-transformers
 faiss-cpu
 numpy
 python-dotenv
-genai
+google-generativeai
 langdetect
